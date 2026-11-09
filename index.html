@@ -221,7 +221,31 @@
         }
     }
 
+    function stopSpokenAlert() {
+        try {
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        } catch (e) { console.log('Speech unavailable:', e); }
+    }
+
+    function speakBulkAlert(item) {
+        if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) return;
+        try {
+            stopSpokenAlert();
+            const remaining = Math.max(0, item.target - item.scanned);
+            const message = 'Perhatian, jumlah besar. ' + item.name + '. Target ' + item.target +
+                '. Terkumpul ' + item.scanned + '. ' + (remaining ? 'Sisa ' + remaining + '. Silakan isi jumlah manual.' : 'Item lengkap.');
+            const utterance = new window.SpeechSynthesisUtterance(message);
+            utterance.lang = 'id-ID';
+            utterance.rate = 1;
+            utterance.volume = 1;
+            const voice = window.speechSynthesis.getVoices().find(v => /^id(?:-|_)/i.test(v.lang));
+            if (voice) utterance.voice = voice;
+            window.speechSynthesis.speak(utterance);
+        } catch (e) { console.log('Speech unavailable:', e); }
+    }
+
     function playSound(type) {
+        stopSpokenAlert();
         if (type === 'success') {
             beep(600, 0.1);
         } else if (type === 'bulk') {
@@ -743,6 +767,7 @@
                     setStatus(`SEMUA ${fakturList.length} FAKTUR LENGKAP — VERIFIKASI SELESAI ✔`, 'success');
                 }
                 if (isBulk) {
+                    speakBulkAlert(item);
                     const allDone = invoiceItems.every(it => it.scanned >= it.target);
                     setStatus(`JUMLAH BESAR — ${item.name} | ${item.fakturShort || 'faktur'} | TARGET ${item.target} | TERKUMPUL ${item.scanned} | SISA ${item.target - item.scanned}. ` +
                         (allDone ? 'SEMUA FAKTUR LENGKAP ✔' : (item.scanned >= item.target ? 'ITEM LENGKAP ✔' : 'Isi total terkumpul, lalu Simpan. Scan ini sudah dihitung +1.')), allDone ? 'success' : 'warn');
