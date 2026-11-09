@@ -110,7 +110,7 @@
         </div>
     </div>
 
-    <div id="statusBox" class="bg-ready">Silakan unggah Excel atau ZIP berisi faktur (Accurate / iPos)</div>
+    <div id="statusBox" class="bg-ready" role="status" aria-live="polite" aria-atomic="true">Silakan unggah Excel atau ZIP berisi faktur (Accurate / iPos)</div>
 
     <div id="summaryBar" class="summary-bar hidden">
         <div class="chip"><span class="chip-label">Faktur Lengkap</span><span class="chip-value" id="chipFaktur">0/0</span></div>
@@ -224,6 +224,10 @@
     function playSound(type) {
         if (type === 'success') {
             beep(600, 0.1);
+        } else if (type === 'bulk') {
+            beep(1100, 0.16, 0.18, 0);
+            beep(700, 0.16, 0.18, 0.22);
+            beep(1100, 0.22, 0.18, 0.44);
         } else if (type === 'complete') {
             beep(600, 0.12, 0.12, 0);
             beep(800, 0.12, 0.12, 0.15);
@@ -607,7 +611,7 @@
                 <td class="${isOver ? 'qty-over' : ''}">
                     ${item.target > 10 ? `
                         <form class="manual-qty" onsubmit="setManualQuantity(event, ${idx}, this)">
-                            <input type="number" name="quantity" min="0" max="${item.target}" step="1" required
+                            <input type="number" id="manual-qty-${idx}" name="quantity" min="0" max="${item.target}" step="1" required
                                    value="${item.scanned}" aria-label="${escAttr('Total terkumpul ' + item.name + ' — ' + item.fakturShort)}"
                                    oninput="this.setCustomValidity('')">
                             <button type="submit">Simpan</button>
@@ -724,7 +728,8 @@
         if (item) {
             if (item.scanned < item.target) {
                 item.scanned++;
-                playSound('success');
+                const isBulk = item.target > 10;
+                playSound(isBulk ? 'bulk' : 'success');
                 const fDone = invoiceItems.filter(it => it.fid === item.fid).every(it => it.scanned >= it.target);
                 let msg = `BERHASIL: ${item.name} — ${item.fakturShort || 'faktur'} (${item.scanned}/${item.target})`;
                 if (fDone) msg += ' ✔ FAKTUR SELESAI';
@@ -734,8 +739,22 @@
                 updateSummary();
                 renderFakturList();
                 if (invoiceItems.every(it => it.scanned >= it.target)) {
-                    playSound('complete');
+                    if (!isBulk) playSound('complete');
                     setStatus(`SEMUA ${fakturList.length} FAKTUR LENGKAP — VERIFIKASI SELESAI ✔`, 'success');
+                }
+                if (isBulk) {
+                    const allDone = invoiceItems.every(it => it.scanned >= it.target);
+                    setStatus(`JUMLAH BESAR — ${item.name} | ${item.fakturShort || 'faktur'} | TARGET ${item.target} | TERKUMPUL ${item.scanned} | SISA ${item.target - item.scanned}. ` +
+                        (allDone ? 'SEMUA FAKTUR LENGKAP ✔' : (item.scanned >= item.target ? 'ITEM LENGKAP ✔' : 'Isi total terkumpul, lalu Simpan. Scan ini sudah dihitung +1.')), allDone ? 'success' : 'warn');
+                    addLog('warn', `${item.code} — JUMLAH BESAR: target ${item.target}, terkumpul ${item.scanned}, sisa ${item.target - item.scanned} (${item.fakturShort || 'faktur'})`);
+                    if (item.scanned < item.target) {
+                        const quantityInput = document.getElementById('manual-qty-' + idx);
+                        if (quantityInput) {
+                            quantityInput.scrollIntoView({ block: 'center', inline: 'nearest' });
+                            quantityInput.focus();
+                            quantityInput.select();
+                        }
+                    }
                 }
             } else {
                 playSound('error');
