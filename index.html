@@ -140,6 +140,8 @@
         <input type="text" id="scanInput" placeholder="Scan Barcode atau Kd. Item di sini..." onkeypress="checkBarcode(event)" autofocus>
         <small class="hint">Scanner menekan Enter secara otomatis — cukup arahkan dan tembak. Klik di area mana pun akan mengembalikan kursor ke kotak ini. Bisa memakai Barcode fisik maupun Kd. Item.</small>
         <ul id="scanLog" class="scan-log hidden"></ul>
+        <button type="button" id="testSoundBtn" class="btn-reset" style="margin-top:12px;color:#2c3e50;border-color:#34495e" onclick="testSound()">Aktifkan / Tes Suara</button>
+        <small id="audioStatus" class="hint" role="status" aria-live="polite">Klik Tes Suara sekali sebelum mulai scan. Buka file di Chrome atau Edge jika suara tidak tersedia di penampil file.</small>
     </div>
 
     <div class="section">
@@ -197,9 +199,28 @@
     // Suara Error menggunakan Base64 dari file MP3 "Astagfirullah" (diwarisi dari checker Accurate)
     const customErrorAudio = new Audio("data:audio/mp3;base64,//OExAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV");
 
+    let sharedAudioContext = null;
+    let currentUtterance = null;
+    let speechVersion = 0;
+
+    function audioStatus(message) {
+        const status = document.getElementById('audioStatus');
+        if (status) status.textContent = message;
+    }
+
+    function getAudioContext() {
+        if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) throw new Error('Browser tidak mendukung audio');
+            sharedAudioContext = new AudioContextClass();
+        }
+        return sharedAudioContext;
+    }
+
     function beep(freq, duration, volume, delay) {
         try {
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const audioCtx = getAudioContext();
+            const play = () => {
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.connect(gain);
@@ -209,6 +230,11 @@
             gain.gain.setValueAtTime(volume || 0.1, t0);
             osc.start(t0);
             osc.stop(t0 + duration);
+            osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+            };
+            if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
+                audioCtx.resume().then(play).catch(() => audioStatus('Audio diblokir. Klik Aktifkan / Tes Suara lalu coba lagi.'));
+            } else play();
         } catch (e) { console.log("Audio error:", e); }
     }
 
@@ -222,26 +248,70 @@
     }
 
     function stopSpokenAlert() {
+        speechVersion++;
+        currentUtterance = null;
         try {
             if ('speechSynthesis' in window) window.speechSynthesis.cancel();
         } catch (e) { console.log('Speech unavailable:', e); }
     }
 
     function speakBulkAlert(item) {
-        if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) return;
+        if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
+            audioStatus('Ucapan tidak didukung di penampil ini. Buka file HTML di Chrome atau Edge, lalu klik Tes Suara.');
+            return;
+        }
         try {
             stopSpokenAlert();
+            const version = speechVersion;
             const remaining = Math.max(0, item.target - item.scanned);
             const message = 'Perhatian, jumlah besar. ' + item.name + '. Target ' + item.target +
                 '. Terkumpul ' + item.scanned + '. ' + (remaining ? 'Sisa ' + remaining + '. Silakan isi jumlah manual.' : 'Item lengkap.');
+            const speak = () => {
+            if (version !== speechVersion) return;
             const utterance = new window.SpeechSynthesisUtterance(message);
+            currentUtterance = utterance;
             utterance.lang = 'id-ID';
             utterance.rate = 1;
             utterance.volume = 1;
-            const voice = window.speechSynthesis.getVoices().find(v => /^id(?:-|_)/i.test(v.lang));
-            if (voice) utterance.voice = voice;
+            const voices = window.speechSynthesis.getVoices();
+            const voice = voices.find(v => /^id(?:-|_)/i.test(v.lang)) || voices.find(v => v.default) || voices[0];
+            if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
+            let started = false;
+            utterance.onstart = () => {
+                started = true;
+                audioStatus('Ucapan sedang diputar' + (voice ? ' — ' + voice.name : '') + '. Jika tidak terdengar, periksa volume dan mute tab.');
+            };
+            utterance.onend = () => { if (version === speechVersion) { currentUtterance = null; audioStatus('Ucapan selesai diputar.'); } };
+            utterance.onerror = e => {
+                if (version !== speechVersion) return;
+                audioStatus('Ucapan gagal (' + (e.error || 'suara tidak tersedia') + '). Klik Tes Suara atau buka file di Chrome/Edge. Nada peringatan tetap digunakan.');
+            };
+            if (window.speechSynthesis.paused) window.speechSynthesis.resume();
             window.speechSynthesis.speak(utterance);
-        } catch (e) { console.log('Speech unavailable:', e); }
+            setTimeout(() => {
+                if (version === speechVersion && !started) audioStatus('Ucapan belum mulai. Klik Tes Suara; jika tetap diam, buka file HTML di Chrome/Edge dan periksa suara perangkat.');
+            }, 5000);
+            };
+            if (window.speechSynthesis.getVoices().length || !window.speechSynthesis.addEventListener) speak();
+            else {
+                audioStatus('Menunggu suara perangkat...');
+                let waiting = true;
+                const ready = () => {
+                    if (!waiting) return;
+                    waiting = false;
+                    window.speechSynthesis.removeEventListener('voiceschanged', ready);
+                    speak();
+                };
+                window.speechSynthesis.addEventListener('voiceschanged', ready);
+                setTimeout(ready, 1200);
+            }
+        } catch (e) { audioStatus('Suara ucapan tidak tersedia. Buka file HTML di Chrome/Edge lalu klik Tes Suara.'); }
+    }
+
+    function testSound() {
+        audioStatus('Mencoba nada dan ucapan. Pastikan volume perangkat aktif.');
+        playSound('bulk');
+        speakBulkAlert({ name: 'Tes suara', target: 24, scanned: 1 });
     }
 
     function playSound(type) {
@@ -800,7 +870,7 @@
 
     // ===================== FOKUS OTOMATIS =====================
     document.addEventListener('click', (e) => {
-        if (e.target.closest('.manual-qty')) return;
+        if (e.target.closest('.manual-qty') || e.target.id === 'testSoundBtn') return;
         if (e.target.tagName !== 'INPUT' || e.target.id === 'scanInput') {
             els.scanInput.focus();
         }
