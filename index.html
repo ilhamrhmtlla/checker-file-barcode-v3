@@ -146,7 +146,7 @@
 
     <div class="section">
         <label>Progress Verifikasi Item</label>
-        <small class="hint">Target di atas 10: saat dipindai, terdengar nada khusus dan ucapan nama barang serta jumlahnya jika browser mendukung suara. Isi total terkumpul (0 sampai target), lalu klik Simpan atau tekan Enter. Jumlah menggantikan total sebelumnya; scan tetap menambah 1.</small>
+        <small class="hint">Target di atas 10: saat dipindai, terdengar nada khusus dan ucapan “Perhatian, item jumlah besar” jika browser mendukung suara. Isi total terkumpul (0 sampai target), lalu klik Simpan atau tekan Enter. Jumlah menggantikan total sebelumnya; scan tetap menambah 1.</small>
         <div class="table-wrap">
             <table>
                 <thead>
@@ -255,7 +255,11 @@
         } catch (e) { console.log('Speech unavailable:', e); }
     }
 
-    function speakBulkAlert(item) {
+    function speakBulkAlert(item, allDone = false) {
+        speakAlert('Perhatian, item jumlah besar.' + (allDone ? ' Alhamdulillah.' : ''));
+    }
+
+    function speakAlert(message) {
         if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
             audioStatus('Ucapan tidak didukung di penampil ini. Buka file HTML di Chrome atau Edge, lalu klik Tes Suara.');
             return;
@@ -263,9 +267,6 @@
         try {
             stopSpokenAlert();
             const version = speechVersion;
-            const remaining = Math.max(0, item.target - item.scanned);
-            const message = 'Perhatian, jumlah besar. ' + item.name + '. Target ' + item.target +
-                '. Terkumpul ' + item.scanned + '. ' + (remaining ? 'Sisa ' + remaining + '. Silakan isi jumlah manual.' : 'Item lengkap.');
             const speak = () => {
             if (version !== speechVersion) return;
             const utterance = new window.SpeechSynthesisUtterance(message);
@@ -766,6 +767,7 @@
         }
         input.setCustomValidity('');
         const previous = item.scanned;
+        const wasAllDone = invoiceItems.every(it => it.scanned >= it.target);
         item.scanned = quantity;
         addLog('ok', item.code + ' — ' + item.name + ' — jumlah manual: ' + previous + ' → ' + quantity + '/' + item.target + ' (' + item.fakturShort + ')');
         updateTable(idx, 'ok');
@@ -776,6 +778,7 @@
             ? 'SEMUA ' + fakturList.length + ' FAKTUR LENGKAP — VERIFIKASI SELESAI ✔'
             : 'JUMLAH DISIMPAN: ' + item.name + ' — ' + item.fakturShort + ' (' + quantity + '/' + item.target + ')', 'success');
         playSound(allDone ? 'complete' : 'success');
+        if (allDone && !wasAllDone) speakAlert('Alhamdulillah.');
         els.scanInput.focus();
     }
 
@@ -833,12 +836,15 @@
                 updateSummary();
                 renderFakturList();
                 if (invoiceItems.every(it => it.scanned >= it.target)) {
-                    if (!isBulk) playSound('complete');
+                    if (!isBulk) {
+                        playSound('complete');
+                        speakAlert('Alhamdulillah.');
+                    }
                     setStatus(`SEMUA ${fakturList.length} FAKTUR LENGKAP — VERIFIKASI SELESAI ✔`, 'success');
                 }
                 if (isBulk) {
-                    speakBulkAlert(item);
                     const allDone = invoiceItems.every(it => it.scanned >= it.target);
+                    speakBulkAlert(item, allDone);
                     setStatus(`JUMLAH BESAR — ${item.name} | ${item.fakturShort || 'faktur'} | TARGET ${item.target} | TERKUMPUL ${item.scanned} | SISA ${item.target - item.scanned}. ` +
                         (allDone ? 'SEMUA FAKTUR LENGKAP ✔' : (item.scanned >= item.target ? 'ITEM LENGKAP ✔' : 'Isi total terkumpul, lalu Simpan. Scan ini sudah dihitung +1.')), allDone ? 'success' : 'warn');
                     addLog('warn', `${item.code} — JUMLAH BESAR: target ${item.target}, terkumpul ${item.scanned}, sisa ${item.target - item.scanned} (${item.fakturShort || 'faktur'})`);
