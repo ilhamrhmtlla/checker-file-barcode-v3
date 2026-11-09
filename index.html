@@ -83,6 +83,11 @@
         .faktur-del { border: 1px solid #e74c3c; color: #c0392b; background: white; border-radius: 6px; font-size: 12px; padding: 4px 10px; cursor: pointer; font-weight: 700; }
         .faktur-del:hover { background: #fdecea; }
 
+        .manual-qty { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .manual-qty input { width: 80px; padding: 7px; border: 1px solid #888; border-radius: 4px; font: inherit; }
+        .manual-qty button { padding: 7px 10px; border: 1px solid #34495e; border-radius: 4px; background: white; color: #2c3e50; cursor: pointer; font: inherit; }
+        .manual-qty button:hover { background: #eaecee; }
+        .manual-qty :focus-visible { outline: 2px solid #2980b9; outline-offset: 2px; }
         .hidden { display: none !important; }
 
         @media (max-width: 640px) {
@@ -139,6 +144,7 @@
 
     <div class="section">
         <label>Progress Verifikasi Item</label>
+        <small class="hint">Target di atas 10: isi total terkumpul (0 sampai target), lalu klik Simpan atau tekan Enter. Jumlah menggantikan total sebelumnya; scan tetap menambah 1.</small>
         <div class="table-wrap">
             <table>
                 <thead>
@@ -240,13 +246,21 @@
     const KODE_KEYS = ["kd. item", "kd item", "kode item", "kode barang", "kode", "sku"];
     const NAMA_KEYS = ["nama item", "nama barang", "nama", "deskripsi"];
     const QTY_KEYS = ["jml", "qty", "kuantitas", "jumlah"];
-    const IGNORE_PHRASES = [
-        "sub total", "total", "ppn", "diskon", "pajak", "biaya",
-        "jumlah item", "pot.", "periode", "laporan", "keseluruhan",
-        "alamat", "no transaksi", "dept."
-    ];
+    // Only standalone report labels are summaries; product names may contain these words.
+    const SUMMARY_LABEL = /^(?:sub\s*total|grand\s*total|total(?:\s+(?:qty|jumlah|item|barang|keseluruhan))?|ppn|diskon|pajak|biaya(?:\s+pengiriman)?|jumlah item|pot\.?|periode|laporan|keseluruhan|alamat|no transaksi|dept\.?)\s*:?$/i;
 
     function cellText(v) { return String(v == null ? "" : v).trim(); }
+
+    function parseQuantity(value) {
+        if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : null;
+        let text = cellText(value);
+        // Indonesian grouping and decimal notation: 1.000 or 1.000,00.
+        if (/^\d{1,3}(?:\.\d{3})+(?:,0+)?$/.test(text)) text = text.replace(/\./g, '').replace(/,0+$/, '');
+        else if (/^\d+(?:[.,]0+)?$/.test(text)) text = text.replace(/[.,]0+$/, '');
+        else return null;
+        const quantity = Number(text);
+        return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null;
+    }
 
     function detectHeader(rows) {
         for (let i = 0; i < rows.length; i++) {
@@ -263,7 +277,7 @@
                 if (!isCustomerCol) {
                     if (cell === "barcode" || cell === "bar code" || cell.includes("barcode")) {
                         tempBarcode = j;
-                    } else if ((cell === "no." || cell === "no") || KODE_KEYS.some(k => cell === k || cell.includes(k))) {
+                    } else if (KODE_KEYS.some(k => cell === k || cell.includes(k))) {
                         if (tempKode === -1) tempKode = j;
                     }
                     if (NAMA_KEYS.some(k => cell === k || cell.includes(k))) {
@@ -320,15 +334,13 @@
             const nama = colNamaIdx !== -1 ? cellText(row[colNamaIdx]) : "";
             const qtyRaw = colQtyIdx !== -1 ? row[colQtyIdx] : "";
 
-            const combined = (kode + " " + barcode + " " + nama).toLowerCase();
-            if (IGNORE_PHRASES.some(w => combined.includes(w))) continue;
             if (!kode && !barcode && !nama) continue;
+            if (detectHeader([row])) continue; // Repeated table header on another printed page.
+            if ((!kode && !barcode && SUMMARY_LABEL.test(nama)) ||
+                (!nama && !barcode && SUMMARY_LABEL.test(kode))) continue;
 
-            let qty = parseInt(qtyRaw, 10);
-            if (isNaN(qty) || qty <= 0) {
-                if (mode === "header") continue;
-                qty = 1; // fallback: baris tanpa qty dianggap 1 (perilaku checker Accurate)
-            }
+            const qty = parseQuantity(qtyRaw);
+            if (qty === null) throw new Error('Baris ' + (i + 1) + ': jumlah untuk "' + (nama || kode || barcode) + '" tidak valid. Gunakan bilangan bulat positif (contoh: 1000 atau 1.000; koma untuk desimal). File tidak dimuat agar item tidak terlewat.');
             if (!kode && nama) kode = "BARANG-" + (i + 1);
 
             items.push({
@@ -592,7 +604,15 @@
                 <td>${esc(item.name)}</td>
                 <td class="faktur-cell" title="${escAttr(item.fakturLabel || '')}">${esc(item.fakturShort || '-')}</td>
                 <td>${item.target}</td>
-                <td class="${isOver ? 'qty-over' : ''}">${item.scanned}</td>
+                <td class="${isOver ? 'qty-over' : ''}">
+                    ${item.target > 10 ? `
+                        <form class="manual-qty" onsubmit="setManualQuantity(event, ${idx}, this)">
+                            <input type="number" name="quantity" min="0" max="${item.target}" step="1" required
+                                   value="${item.scanned}" aria-label="${escAttr('Total terkumpul ' + item.name + ' — ' + item.fakturShort)}"
+                                   oninput="this.setCustomValidity('')">
+                            <button type="submit">Simpan</button>
+                        </form>` : item.scanned}
+                </td>
                 <td>${isOver ? '⚠ LEBIH' : (isComplete ? '✔ LENGKAP' : '⏳ BELUM')}</td>
             `;
             els.tableBody.appendChild(tr);
@@ -631,6 +651,34 @@
         els.scanLog.innerHTML = logEntries.map(en =>
             '<li class="' + en.type + '"><b>' + en.time + '</b> — ' + esc(en.text) + '</li>'
         ).join('');
+    }
+
+    function setManualQuantity(event, idx, form) {
+        event.preventDefault();
+        if (importBusy) return;
+        const item = invoiceItems[idx];
+        if (!item || item.target <= 10) return;
+        const input = form.elements.quantity;
+        const value = input.value.trim();
+        const quantity = Number(value);
+        if (!value || !Number.isSafeInteger(quantity) || quantity < 0 || quantity > item.target) {
+            input.setCustomValidity('Masukkan jumlah bulat dari 0 sampai ' + item.target + '.');
+            input.reportValidity();
+            return;
+        }
+        input.setCustomValidity('');
+        const previous = item.scanned;
+        item.scanned = quantity;
+        addLog('ok', item.code + ' — ' + item.name + ' — jumlah manual: ' + previous + ' → ' + quantity + '/' + item.target + ' (' + item.fakturShort + ')');
+        updateTable(idx, 'ok');
+        updateSummary();
+        renderFakturList();
+        const allDone = invoiceItems.every(it => it.scanned >= it.target);
+        setStatus(allDone
+            ? 'SEMUA ' + fakturList.length + ' FAKTUR LENGKAP — VERIFIKASI SELESAI ✔'
+            : 'JUMLAH DISIMPAN: ' + item.name + ' — ' + item.fakturShort + ' (' + quantity + '/' + item.target + ')', 'success');
+        playSound(allDone ? 'complete' : 'success');
+        els.scanInput.focus();
     }
 
     function updateBarcodeAlias(idx, value) {
@@ -708,6 +756,7 @@
 
     // ===================== FOKUS OTOMATIS =====================
     document.addEventListener('click', (e) => {
+        if (e.target.closest('.manual-qty')) return;
         if (e.target.tagName !== 'INPUT' || e.target.id === 'scanInput') {
             els.scanInput.focus();
         }
