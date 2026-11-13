@@ -403,7 +403,7 @@
         return null;
     }
 
-    function parseInvoiceRows(rows) {
+    function parseInvoiceRows(rows, sheetName = "") {
         const header = detectHeader(rows);
         const items = [];
         let mode, colKodeIdx, colBarcodeIdx, colNamaIdx, colQtyIdx, start;
@@ -438,8 +438,12 @@
             if ((!kode && !barcode && SUMMARY_LABEL.test(nama)) ||
                 (!nama && !barcode && SUMMARY_LABEL.test(kode))) continue;
 
+            // Exported invoices may place a signature marker beneath the item table.
+            if (items.length && !kode && !barcode && !cellText(qtyRaw) &&
+                /^\(\s*HJ\s*\)$/i.test(nama)) continue;
+
             const qty = parseQuantity(qtyRaw);
-            if (qty === null) throw new Error('Baris ' + (i + 1) + ': jumlah untuk "' + (nama || kode || barcode) + '" tidak valid. Gunakan bilangan bulat positif (contoh: 1000 atau 1.000; koma untuk desimal). File tidak dimuat agar item tidak terlewat.');
+            if (qty === null) throw new Error((sheetName ? 'Sheet "' + sheetName + '", ' : '') + 'baris Excel ' + (i + 1) + ': jumlah untuk "' + (nama || kode || barcode) + '" tidak valid. Gunakan bilangan bulat positif (contoh: 1000 atau 1.000; koma untuk desimal). File tidak dimuat agar item tidak terlewat.');
             if (!kode && nama) kode = "BARANG-" + (i + 1);
 
             items.push({
@@ -514,8 +518,8 @@
             if (loadedKeys.has(key)) { skipped.push(name); return; }
             const workbook = XLSX.read(bytes, { type: 'array' });
             const results = workbook.SheetNames.map(sheetName => {
-                const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
-                return { sheetName, ...parseInvoiceRows(rows) };
+                const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, range: 0 });
+                return { sheetName, ...parseInvoiceRows(rows, sheetName) };
             }).filter(r => r.items.length);
             if (!results.length) throw new Error('Tidak ada sheet faktur yang dikenali');
             const staged = results.map(r => {
